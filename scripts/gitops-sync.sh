@@ -54,7 +54,10 @@ dryrun_fluent_bit() {
   cp "$src_dir/parsers.conf"    "$tmp/parsers.conf"
   # Env vars in the config (${AXIOM_DATASET}, ${AXIOM_API_TOKEN}) must be set
   # for the dry-run to parse — values don't matter, no network is touched.
-  docker run --rm \
+  # sudo: cron's pi user lacks docker-socket access without it. The redirect
+  # writes to a pi-owned tmp file so it doesn't need sudo (SC2024 false positive).
+  # shellcheck disable=SC2024
+  sudo docker run --rm \
     -v "$tmp:/fluent-bit/etc:ro" \
     -e AXIOM_DATASET=dryrun \
     -e AXIOM_API_TOKEN=dryrun \
@@ -172,7 +175,7 @@ main() {
     cp "${CLONE_PATH}/fluent-bit/fluent-bit.conf" "${LIVE_DIR}/fluent-bit.conf"
     cp "${CLONE_PATH}/fluent-bit/parsers.conf"    "${LIVE_DIR}/parsers.conf"
     log INFO "Restarting ${CONTAINER_NAME}"
-    if ! docker restart "$CONTAINER_NAME" > /dev/null; then
+    if ! sudo docker restart "$CONTAINER_NAME" > /dev/null; then
       log ERROR "docker restart ${CONTAINER_NAME} failed — manual intervention needed"
       exit 1
     fi
