@@ -95,6 +95,47 @@ sudo docker logs --tail 20 fluent-bit-axiom
 # Should see no errors — check Axiom Stream view for incoming events
 ```
 
+## GitOps auto-deploy
+
+Once bootstrapped, the Firewalla keeps itself in sync with `origin/main`. No
+more `deploy.sh` round-trips for routine config changes.
+
+**How it works.** `cron/user_crontab` schedules `scripts/gitops-sync.sh` every
+5 minutes. The script:
+
+1. `git fetch origin` in the on-device clone at `/home/pi/.firewalla/firewalla-axiom-pipeline/`.
+2. If `HEAD == origin/main`: silent exit.
+3. Otherwise: capture a rollback SHA, `git reset --hard origin/main`, classify
+   the diff (fluent-bit config? crontab? scripts? docs?), and act only on the
+   files that matter.
+4. **Validate** any new `fluent-bit/*.conf` via `fluent-bit --dry-run` in a
+   throwaway container *before* swapping the live files.
+5. On validation pass: copy configs into `/home/pi/.firewalla/config/`, run
+   `docker restart fluent-bit-axiom`, reinstall crontab if it changed.
+6. On validation fail: `git reset --hard <rollback-sha>` and log the dry-run
+   output. The live container keeps running on the last-known-good config.
+
+**Log:** `/home/pi/.firewalla/config/gitops-sync.log` — timestamped, leveled,
+rotates at 1 MB to `.log.1`. No-ops are suppressed; expect quiet days.
+
+**Initial bootstrap.** First-time setup on a new Firewalla (after scp'ing your
+`.env` to `/home/pi/.firewalla/config/log_shipping.env`):
+
+```bash
+ssh pi@<firewalla-ip>
+curl -sSL https://raw.githubusercontent.com/PitziLabs/firewalla-axiom-pipeline/main/scripts/bootstrap.sh | bash
+```
+
+`scripts/bootstrap.sh` clones the repo into `/home/pi/.firewalla/firewalla-axiom-pipeline/`, copies the config tree to its live destination, installs the
+crontab (which includes the GitOps poller), and starts the container.
+
+**Break-glass.** `deploy.sh <fw-ip>` from a workstation still works for the
+rare case where you need to push without going through `main`.
+
+**What's NOT in scope.** Secrets (`log_shipping.env`) are device-local and
+not in git — the sync never touches them. If you rotate the Axiom token, scp
+the new `.env` manually.
+
 ## File layout
 
 ```
@@ -107,7 +148,11 @@ firewalla-axiom-pipeline/
 │   └── parsers.conf                     # Zeek log parser definitions
 ├── scripts/
 │   ├── start_log_shipping.sh            # Docker bootstrap (post_main.d)
-│   └── device_lookup_export.sh          # Redis → Axiom device inventory
+│   ├── device_lookup_export.sh          # Redis → Axiom device inventory
+│   ├── device_group_upload.sh           # Group metadata helper
+│   ├── fluent_bit_healthcheck.sh        # Wedged-container restarter (cron)
+│   ├── gitops-sync.sh                   # 5-min poll → fetch → validate → reload
+│   └── bootstrap.sh                     # One-time on-device setup
 ├── cron/
 │   └── user_crontab                     # Persistent cron jobs
 ├── dashboards/

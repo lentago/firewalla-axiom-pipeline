@@ -20,3 +20,7 @@
 # pool stuck, etc). Checks last 5 min of logs — if >80% errors, restarts.
 # Also restarts container if it's stopped/missing.
 */5 * * * * /home/pi/.firewalla/config/fluent_bit_healthcheck.sh 2>&1
+
+# GitOps: pull origin/main, validate, swap live files + restart container on
+# diff. Silent when up-to-date. See scripts/gitops-sync.sh and README §GitOps.
+*/5 * * * * /home/pi/.firewalla/firewalla-axiom-pipeline/scripts/gitops-sync.sh 2>&1

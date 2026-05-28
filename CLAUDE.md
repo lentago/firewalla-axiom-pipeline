@@ -102,13 +102,26 @@ Defined in `.env` (copied from `env.example`), never committed to git:
 ## Development Workflow
 
 ### Making Changes
-1. Edit config/scripts locally
-2. Test by deploying to Firewalla: `./deploy.sh <firewalla-ip>`
-3. Verify logs: `ssh pi@<ip> docker logs fluent-bit-axiom --tail 50`
-4. Check Axiom Stream view for incoming events
+1. Edit config/scripts on a branch, open a PR, merge to `main`.
+2. The Firewalla's GitOps poller picks up the change within 5 min — no SSH
+   required for routine config changes.
+3. Check `/home/pi/.firewalla/config/gitops-sync.log` to confirm the apply,
+   and Axiom Stream view / Grafana for the data result.
 
-### Deployment (`deploy.sh`)
-The deploy script performs these steps in order:
+### GitOps auto-deploy (the normal path)
+`scripts/gitops-sync.sh` runs every 5 min from `cron/user_crontab`. It
+fetches `origin/main`, validates any new `fluent-bit/*.conf` via
+`fluent-bit --dry-run` in a throwaway container, then swaps live files in
+`/home/pi/.firewalla/config/` and restarts `fluent-bit-axiom` only if the
+relevant files changed. Validation failure → `git reset --hard` to the
+rollback SHA; the live container is never disturbed by a bad commit.
+
+`.env` / `log_shipping.env` is device-local and never touched by sync.
+
+### Deployment (`deploy.sh`) — break-glass only
+Workstation-driven push for the rare cases GitOps can't help (Firewalla
+offline from GitHub, bad commit blocking the poller, first-time bootstrap
+without `bootstrap.sh`). Steps:
 1. Validates `.env` exists locally
 2. Creates persistent directories on Firewalla via SSH
 3. Copies all config files and scripts via SCP
