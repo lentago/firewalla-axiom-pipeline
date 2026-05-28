@@ -13,9 +13,12 @@ Your Firewalla app shows you what domains each device visits, but the data rotat
 - **HTTPS visibility** via SSL/TLS handshake metadata (SNI, cert chain fingerprints) — what was actually connected to, not just looked up
 - **Device name resolution** via automated Redis inventory export
 - **Firmware-update resilience** using Firewalla's `post_main.d` persistence
+- **Self-healing config changes** via a 5-minute GitOps poller — merge a PR to `main`, the Firewalla picks it up
 - **~50 MB RAM overhead** on the Firewalla
 
 Total cost: **$0/month** (Axiom free tier: 500 GB/month, 30-day retention)
+
+The same Fluent Bit instance optionally fans out to a LAN Loki receiver (see [§Optional: dual-output to Grafana Cloud](#optional-dual-output-to-grafana-cloud)) — Axiom is the primary, long-retention destination; Loki is the live dashboard pane.
 
 ## Architecture
 
@@ -52,56 +55,40 @@ nano .env
 # Fill in your Axiom dataset names and API token
 ```
 
-### 3. Deploy to Firewalla
+### 3. Place the secrets on the Firewalla
+
+`.env` (your Axiom credentials) is the only thing that has to land on the device by hand — git never sees it. Future config changes flow through GitOps, no SSH required.
 
 ```bash
-# Replace with your Firewalla's IP address
-export FW_IP=192.168.1.1
-
-# Copy config files to Firewalla's persistent directory
-scp fluent-bit/fluent-bit.conf pi@${FW_IP}:/home/pi/.firewalla/config/
-scp fluent-bit/parsers.conf pi@${FW_IP}:/home/pi/.firewalla/config/
-scp scripts/device_lookup_export.sh pi@${FW_IP}:/home/pi/.firewalla/config/
-scp scripts/start_log_shipping.sh pi@${FW_IP}:/home/pi/.firewalla/config/post_main.d/
-scp cron/user_crontab pi@${FW_IP}:/home/pi/.firewalla/config/
+export FW_IP=192.168.1.1   # your Firewalla's LAN address
 scp .env pi@${FW_IP}:/home/pi/.firewalla/config/log_shipping.env
 ```
 
-### 4. Start it up
+### 4. Bootstrap
 
 ```bash
-ssh pi@${FW_IP}
-
-# Make scripts executable
-chmod +x /home/pi/.firewalla/config/post_main.d/start_log_shipping.sh
-chmod +x /home/pi/.firewalla/config/device_lookup_export.sh
-
-# Start the log pipeline
-sudo /home/pi/.firewalla/config/post_main.d/start_log_shipping.sh
-
-# Export device inventory
-sudo /home/pi/.firewalla/config/device_lookup_export.sh
-
-# Install the cron for hourly device exports
-crontab /home/pi/.firewalla/config/user_crontab
+ssh pi@${FW_IP} 'curl -sSL https://raw.githubusercontent.com/PitziLabs/firewalla-axiom-pipeline/main/scripts/bootstrap.sh | bash'
 ```
+
+`scripts/bootstrap.sh` clones this repo to `/home/pi/.firewalla/firewalla-axiom-pipeline/`, copies the config tree into `/home/pi/.firewalla/config/`, installs the crontab (which includes the 5-min GitOps poller), and starts the Fluent Bit container. One-time only — after this, the device self-syncs from `main`.
 
 ### 5. Verify
 
 ```bash
-# Check Fluent Bit is healthy
-sudo docker logs --tail 20 fluent-bit-axiom
+# Container running and shipping
+ssh pi@${FW_IP} 'sudo docker logs --tail 20 fluent-bit-axiom'
 
-# Should see no errors — check Axiom Stream view for incoming events
+# GitOps poller has seen origin (look for a recent "Deploy complete" or empty log = up-to-date)
+ssh pi@${FW_IP} 'tail -20 /home/pi/.firewalla/config/gitops-sync.log 2>/dev/null || echo "(log empty — clean no-ops)"'
 ```
+
+Then open Axiom **Stream** view on the `firewalla` dataset; you should see DNS, connection, and SSL events within a minute or two.
 
 ## GitOps auto-deploy
 
-Once bootstrapped, the Firewalla keeps itself in sync with `origin/main`. No
-more `deploy.sh` round-trips for routine config changes.
+Once bootstrapped, the Firewalla keeps itself in sync with `origin/main`. The normal change workflow is: open a PR → merge → wait up to 5 minutes for the device to pick it up.
 
-**How it works.** `cron/user_crontab` schedules `scripts/gitops-sync.sh` every
-5 minutes. The script:
+**How the loop works.** `cron/user_crontab` schedules `scripts/gitops-sync.sh` every 5 minutes. The script:
 
 1. `git fetch origin` in the on-device clone at `/home/pi/.firewalla/firewalla-axiom-pipeline/`.
 2. If `HEAD == origin/main`: silent exit.
@@ -115,26 +102,13 @@ more `deploy.sh` round-trips for routine config changes.
 6. On validation fail: `git reset --hard <rollback-sha>` and log the dry-run
    output. The live container keeps running on the last-known-good config.
 
-**Log:** `/home/pi/.firewalla/config/gitops-sync.log` — timestamped, leveled,
-rotates at 1 MB to `.log.1`. No-ops are suppressed; expect quiet days.
+Typical deploy wall-clock for a config change: **~2 seconds** (dry-run + file copy + container restart). The Loki output sees a sub-3-second backlog flush; Axiom output is uninterrupted.
 
-**Initial bootstrap.** First-time setup on a new Firewalla (after scp'ing your
-`.env` to `/home/pi/.firewalla/config/log_shipping.env`):
+**Log:** `/home/pi/.firewalla/config/gitops-sync.log` — timestamped, leveled, rotates at 1 MB to `.log.1`. No-ops are suppressed; expect quiet days. The log is the first place to look when a merge didn't seem to take.
 
-```bash
-ssh pi@<firewalla-ip>
-curl -sSL https://raw.githubusercontent.com/PitziLabs/firewalla-axiom-pipeline/main/scripts/bootstrap.sh | bash
-```
+**Secrets stay device-local.** `log_shipping.env` is never touched by sync. If you rotate the Axiom token, scp the new env file manually (see [§Manual / break-glass deploy](#manual--break-glass-deploy)).
 
-`scripts/bootstrap.sh` clones the repo into `/home/pi/.firewalla/firewalla-axiom-pipeline/`, copies the config tree to its live destination, installs the
-crontab (which includes the GitOps poller), and starts the container.
-
-**Break-glass.** `deploy.sh <fw-ip>` from a workstation still works for the
-rare case where you need to push without going through `main`.
-
-**What's NOT in scope.** Secrets (`log_shipping.env`) are device-local and
-not in git — the sync never touches them. If you rotate the Axiom token, scp
-the new `.env` manually.
+**Break-glass.** `deploy.sh <fw-ip>` from a workstation still works for the rare case where you need to push from a non-`main` branch (e.g., debugging a poller bug that's blocking the loop). See the appendix.
 
 ## File layout
 
@@ -171,6 +145,23 @@ See [dashboards/axiom-queries.md](dashboards/axiom-queries.md) for the complete 
 - DNS activity over time
 - Dashboard filter bar configuration for device drill-down
 
+## Optional: dual-output to Grafana Cloud
+
+The shipped `fluent-bit.conf` has **two outputs** active:
+
+| Output | Destination | Purpose |
+|---|---|---|
+| `[OUTPUT] http` (line ~111) | Axiom HTTPS API | Long-retention search, dashboards, primary durable copy |
+| `[OUTPUT] loki` (line ~134) | LAN Loki receiver at `192.168.139.20:3100` | Live dashboards / alerting via Grafana Cloud (relayed by an Alloy container in [homelab-observability](https://github.com/PitziLabs/homelab-observability)) |
+
+The two outputs are independent — each retries on its own, and an outage on one side does not affect the other. `Retry_Limit False` on both means a peer outage self-heals without operator intervention once connectivity returns (the fix from [#43](https://github.com/PitziLabs/firewalla-axiom-pipeline/issues/43)).
+
+If you don't run a LAN Loki receiver, either:
+- Edit the Loki block's `Host`/`Port` to point at your own Loki/Promtail/Vector endpoint, or
+- Comment out the `[OUTPUT] loki` block entirely.
+
+The Loki output is the one place in this repo where a LAN-specific address (`192.168.139.20`) is baked into config — if you're using this template on a different network, this is the line to change.
+
 ## Firewalla internals
 
 This pipeline relies on the following Firewalla data sources:
@@ -202,6 +193,32 @@ Note: field names contain dots (e.g., `id.orig_h`), which requires bracket notat
 For the complete field reference covering all `dns.log` and `conn.log` fields, gotchas, and example raw events, see **[docs/zeek-field-reference.md](docs/zeek-field-reference.md)**.
 
 ## Troubleshooting
+
+### A merged PR didn't deploy
+
+The Firewalla's GitOps poller logs to `/home/pi/.firewalla/config/gitops-sync.log`. Tail it after a merge to see why:
+
+```bash
+ssh pi@<fw-ip> tail -30 /home/pi/.firewalla/config/gitops-sync.log
+```
+
+Expected sequence on a successful config change:
+
+```
+[ts] [INFO] Applying N commit(s) <old>..<new>:
+[ts] [INFO]   <sha> <commit subject>
+[ts] [INFO] Validating new fluent-bit config via dry-run
+[ts] [INFO] Dry-run OK
+[ts] [INFO] Restarting fluent-bit-axiom
+[ts] [INFO] Deploy complete at <sha>
+```
+
+Failure modes:
+
+- `Dry-run FAILED — rolling back.` → your new `fluent-bit/*.conf` doesn't parse. The log shows the fluent-bit error. Live container keeps serving on the previous SHA.
+- `git fetch failed` → Firewalla can't reach GitHub. Check WAN, then `ssh pi@<fw-ip> 'git -C /home/pi/.firewalla/firewalla-axiom-pipeline ls-remote origin'`.
+- `docker: permission denied` → cron's `pi` user lost docker-group access. The script uses `sudo docker` to work around this; if it broke, check `getent group docker` includes `pi` and `sudo -n -l` works for the docker binary.
+- Log is empty / nothing happens → the poller cron isn't installed. `ssh pi@<fw-ip> crontab -l | grep gitops-sync`.
 
 ### Data stopped flowing
 
@@ -282,6 +299,32 @@ sudo docker stats fluent-bit-axiom --no-stream
 ```bash
 tail -5 /bspool/manager/dns.log
 ```
+
+## Manual / break-glass deploy
+
+GitOps assumes the Firewalla can reach GitHub and that the poller itself isn't broken. When either of those assumptions fails (or you're bootstrapping the box for the first time without `curl | bash`), `deploy.sh` from the workstation does the full sync:
+
+```bash
+cp env.example .env   # fill in your Axiom dataset + token
+./deploy.sh <firewalla-ip>
+```
+
+What it does, step by step:
+
+1. Validates the local `.env`.
+2. SSHs to the Firewalla, creates `/home/pi/.firewalla/config/post_main.d/` and `/home/pi/.firewalla/config/fluent-bit-data/`.
+3. `scp`s `fluent-bit/*.conf`, `scripts/*.sh`, `cron/user_crontab`, and `.env` (as `log_shipping.env`) to the device.
+4. Sets executable bits.
+5. Runs `start_log_shipping.sh` to (re)start the Fluent Bit container.
+6. Installs the crontab and runs an initial device export.
+
+`deploy.sh` does **not** clone the repo or install the GitOps poller's target directory. If you used `deploy.sh` to bootstrap from scratch (no `bootstrap.sh`), follow up with:
+
+```bash
+ssh pi@<fw-ip> 'git clone https://github.com/PitziLabs/firewalla-axiom-pipeline.git /home/pi/.firewalla/firewalla-axiom-pipeline'
+```
+
+After that, the cron poller (already in `user_crontab`) will start syncing every 5 min.
 
 ## Contributing
 

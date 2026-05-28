@@ -29,32 +29,42 @@ The Loki output is independent of the HTTP output — either path runs alone. Th
 
 ```
 firewalla-axiom-pipeline/
-├── CLAUDE.md                  # This file
-├── README.md                  # User-facing docs, setup, troubleshooting
-├── LICENSE                    # MIT
-├── deploy.sh                  # One-command deployment to Firewalla via SSH
-├── env.example                # Template for .env (AXIOM_DATASET, AXIOM_API_TOKEN)
-├── .gitignore                 # Excludes .env, *.log, /tmp/
+├── CLAUDE.md                       # This file
+├── README.md                       # User-facing docs, setup, troubleshooting
+├── LICENSE                         # MIT
+├── deploy.sh                       # Break-glass workstation deploy via SSH
+├── env.example                     # Template for .env (AXIOM_DATASET, AXIOM_API_TOKEN)
+├── .gitignore                      # Excludes .env, *.log, /tmp/
 ├── fluent-bit/
-│   ├── fluent-bit.conf        # Main pipeline config: inputs, filters, Axiom output
-│   └── parsers.conf           # Zeek timestamp parser (epoch → structured time)
+│   ├── fluent-bit.conf             # Inputs + Axiom output + Loki output
+│   └── parsers.conf                # Zeek timestamp parser
 ├── scripts/
-│   ├── start_log_shipping.sh  # Docker bootstrap; lives in post_main.d/ on device
-│   └── device_lookup_export.sh # Redis → Axiom device name lookup export
+│   ├── bootstrap.sh                # One-time on-device clone + cron install
+│   ├── gitops-sync.sh              # 5-min poll → fetch → validate → reload
+│   ├── start_log_shipping.sh       # Docker bootstrap; lives in post_main.d/ on device
+│   ├── fluent_bit_healthcheck.sh   # Cron-driven wedged-container restarter
+│   ├── device_lookup_export.sh     # Redis → Axiom device inventory
+│   └── device_group_upload.sh      # Group metadata helper
 ├── cron/
-│   └── user_crontab           # Hourly device export, boot hook, 5-min log cleanup
-└── dashboards/
-    └── axiom-queries.md       # APL queries for Axiom dashboards
+│   └── user_crontab                # Device export, log cleanup, healthcheck, gitops poll
+├── dashboards/
+│   └── axiom-queries.md            # APL queries for Axiom dashboards
+└── docs/
+    ├── architecture.svg            # Pipeline diagram
+    └── zeek-field-reference.md     # Zeek JSON field reference
 ```
 
 ## Key Entry Points
 
 | File | Purpose | Runs Where |
 |------|---------|------------|
-| `deploy.sh` | Deploys everything to Firewalla via SSH/SCP | Developer machine |
+| `scripts/bootstrap.sh` | One-time on-device setup (clone + cron + container start) | Firewalla (manual, once) |
+| `scripts/gitops-sync.sh` | Poll origin/main, validate, swap live files, restart container | Firewalla (cron, every 5 min) |
 | `scripts/start_log_shipping.sh` | Starts Fluent Bit container; auto-runs after firmware updates | Firewalla (`post_main.d/`) |
-| `scripts/device_lookup_export.sh` | Exports device names from Redis to Axiom | Firewalla (cron) |
-| `fluent-bit/fluent-bit.conf` | Defines log inputs, filters, and Axiom HTTP output | Inside Fluent Bit container |
+| `scripts/fluent_bit_healthcheck.sh` | Restart wedged container based on log error rate | Firewalla (cron, every 5 min) |
+| `scripts/device_lookup_export.sh` | Exports device names from Redis to Axiom | Firewalla (cron, hourly) |
+| `fluent-bit/fluent-bit.conf` | Defines log inputs + Axiom HTTP output + LAN Loki output | Inside Fluent Bit container |
+| `deploy.sh` | Break-glass workstation push (when GitOps is unusable) | Developer machine |
 
 ## Coding Conventions
 
@@ -84,10 +94,13 @@ firewalla-axiom-pipeline/
 |------|-------------|
 | `/home/pi/.firewalla/config/` | Persistent config dir (survives firmware updates) |
 | `/home/pi/.firewalla/config/post_main.d/` | Auto-run scripts after boot/firmware update |
+| `/home/pi/.firewalla/firewalla-axiom-pipeline/` | On-device git clone managed by `gitops-sync.sh` |
+| `/home/pi/.firewalla/config/gitops-sync.log` | GitOps poller log (1 MB rotation → `.log.1`) |
+| `/home/pi/.firewalla/config/.gitops-sync.lock` | flock file preventing concurrent poller runs |
 | `/bspool/manager/dns.log` | Zeek DNS log (tmpfs, 30 MB limit) |
 | `/bspool/manager/conn.log` | Zeek connection log |
 | `/alog/acl-audit.log` | Firewalla ACL block log (kernel iptables FW_ADT lines) |
-| `/home/pi/.firewalla/config/log_shipping.env` | Deployed .env file on device |
+| `/home/pi/.firewalla/config/log_shipping.env` | Deployed .env file on device (NEVER in git) |
 
 ## Environment Variables
 
@@ -133,6 +146,8 @@ without `bootstrap.sh`). Steps:
 
 ### Common Troubleshooting
 - **No data in Axiom**: Check `docker logs fluent-bit-axiom` for auth errors
+- **No data in Loki only (Axiom still flowing)**: Check `sudo ss -tn | grep :3100` for connections to the Alloy LXC. If absent and not retrying, restart fluent-bit: `sudo docker restart fluent-bit-axiom`. The pre-#43 cause (`Retry_Limit 3` on the Loki output giving up silently) is fixed; if you see it recur, suspect a different stuck-state.
+- **A merged PR didn't deploy**: Tail `/home/pi/.firewalla/config/gitops-sync.log`. Look for `Dry-run FAILED` (bad config — rollback already happened, fix the PR), `git fetch failed` (WAN/GitHub), or nothing at all (poller cron not installed — `crontab -l | grep gitops-sync`).
 - **bspool full**: The 5-min cron cleanup job handles rotated logs; verify it's running
 - **Device names missing**: Run `device_lookup_export.sh` manually and check HTTP status
 
@@ -142,10 +157,13 @@ without `bootstrap.sh`). Steps:
 - **Preserve firmware-update resilience** — all persistent files go under `/home/pi/.firewalla/config/`
 - **Keep resource usage low** — Firewalla is an appliance with limited RAM (~50 MB budget for this pipeline)
 - **Maintain the strict bash style** — `set -euo pipefail`, prefixed log messages, early validation
-- **Don't add dependencies** — the Firewalla has limited packages; only `bash`, `docker`, `curl`, `redis-cli`, `ssh` are available
+- **Don't add dependencies** — the Firewalla has limited packages; only `bash`, `docker`, `curl`, `redis-cli`, `ssh`, `git`, `flock` are available
 - **Test deploy.sh changes carefully** — it runs over SSH on a production network appliance
 - **Keep .env out of git** — it's in `.gitignore`; use `env.example` as the template
 - **Axiom free tier constraints** — 500 GB/month ingest, 30-day retention; avoid high-cardinality explosions
+- **Cron + docker on Firewalla needs `sudo`** — the `pi` user is in the docker group via PAM at login, but cron sessions don't inherit it (this bit us in #48). Any new script invoked from `user_crontab` that touches docker must use `sudo docker`, not bare `docker`.
+- **Retry_Limit on every fluent-bit OUTPUT is `False`** — finite retries with a long peer outage silently stop the output forever (#43). On-disk buffering bounds the backlog; leave the limit unbounded.
+- **Changes to `scripts/gitops-sync.sh` itself need extra care** — a bug in the poller can either stop the loop or break future deploys. The `scripts/gitops-sync.sh|scripts/bootstrap.sh` case branch in the file classifier exists specifically so a script-only PR doesn't trigger a fluent-bit dry-run + restart. When changing the script, the safe rollout is: scp the new version to the on-device clone out-of-band, then merge the PR — that way the running poller picks up the fix immediately instead of needing one more cycle.
 
 PR workflow + auto-merge arming protocol is fleet-wide; see `~/repos/CLAUDE.md`.
 
