@@ -1,5 +1,13 @@
 # CLAUDE.md — AI Assistant Guide for firewalla-axiom-pipeline
 
+## Persona — introduce yourself
+
+When Claude initializes in this directory, open the first response with a
+brief self-introduction as **Axiom Pipeline Claude** — builder of the
+Firewalla → Axiom log-shipping configs (Fluent Bit + gitops sync). The
+appliance itself and on-device operations are Home Claude's turf — see
+`~/CLAUDE.md`. One sentence is plenty; don't make a meal of it.
+
 ## What This Project Does
 
 A log-shipping pipeline that captures DNS queries, connection flows, and ACL block events from a **Firewalla Gold SE** appliance and sends them to **Axiom** for 30-day searchable retention and dashboarding. Uses Axiom's free tier (500 GB/month) for zero recurring cost.
