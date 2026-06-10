@@ -34,6 +34,12 @@ if [ -z "${AXIOM_DATASET:-}" ] || [ -z "${AXIOM_API_TOKEN:-}" ]; then
     exit 1
 fi
 
+# Grafana Cloud Loki creds are optional — if unset, the direct Loki output just
+# fails at runtime and retries (Axiom is unaffected). Warn so it isn't silent.
+if [ -z "${GRAFANA_CLOUD_LOGS_HOST:-}" ] || [ -z "${GRAFANA_CLOUD_LOGS_USER:-}" ] || [ -z "${GRAFANA_CLOUD_LOGS_TOKEN:-}" ]; then
+    echo "[log-shipping] WARNING: GRAFANA_CLOUD_LOGS_{HOST,USER,TOKEN} not all set — the direct Loki output will be inactive (Axiom unaffected)."
+fi
+
 # --- Wait for Docker ---------------------------------------------------------
 echo "[log-shipping] Waiting for Docker daemon..."
 for _i in $(seq 1 30); do
@@ -80,6 +86,9 @@ docker run -d \
     --network host \
     -e AXIOM_DATASET="${AXIOM_DATASET}" \
     -e AXIOM_API_TOKEN="${AXIOM_API_TOKEN}" \
+    -e GRAFANA_CLOUD_LOGS_HOST="${GRAFANA_CLOUD_LOGS_HOST:-}" \
+    -e GRAFANA_CLOUD_LOGS_USER="${GRAFANA_CLOUD_LOGS_USER:-}" \
+    -e GRAFANA_CLOUD_LOGS_TOKEN="${GRAFANA_CLOUD_LOGS_TOKEN:-}" \
     -v "${CONFIG_DIR}/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro" \
     -v "${CONFIG_DIR}/parsers.conf:/fluent-bit/etc/parsers.conf:ro" \
     -v "${CONFIG_DIR}/fluent-bit-data:/fluent-bit/data" \
