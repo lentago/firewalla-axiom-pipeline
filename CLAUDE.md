@@ -22,7 +22,7 @@ Firewalla Zeek logs (dns/conn/ssl) + acl-audit ──► Fluent Bit (Docker) ─
 Redis device inventory ──► device_lookup_export.sh ──► Axiom "firewalla-devices" dataset
 ```
 
-The Loki output is independent of the HTTP output — either path runs alone. The optional Loki receiver in our homelab is the Alloy container in [PitziLabs/homelab-observability](https://github.com/PitziLabs/homelab-observability); other consumers (Promtail, Vector, a self-hosted Loki) work too.
+The Loki output is independent of the HTTP output — either path runs alone. The optional Loki receiver in our homelab is the Alloy container in [lentago/homelab-observability](https://github.com/lentago/homelab-observability); other consumers (Promtail, Vector, a self-hosted Loki) work too.
 
 ## Tech Stack
 

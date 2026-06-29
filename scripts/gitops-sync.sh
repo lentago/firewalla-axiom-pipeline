@@ -9,7 +9,7 @@
 # cron/user_crontab changed). Rolls back to the pre-sync SHA on validation
 # failure — the live container keeps running on the last-known-good config.
 #
-# Modeled on PitziLabs/homeassistant-config scripts/gitops-sync.sh. See issue
+# Modeled on lentago/homeassistant-config scripts/gitops-sync.sh. See issue
 # #45 for the design rationale.
 # =============================================================================
 set -euo pipefail

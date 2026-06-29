@@ -46,7 +46,7 @@ The same Fluent Bit instance optionally fans out to a LAN Loki receiver (see [§
 ### 2. Clone this repo and configure
 
 ```bash
-git clone https://github.com/PitziLabs/firewalla-axiom-pipeline.git
+git clone https://github.com/lentago/firewalla-axiom-pipeline.git
 cd firewalla-axiom-pipeline
 
 # Create your local env file (not committed to git)
@@ -67,7 +67,7 @@ scp .env pi@${FW_IP}:/home/pi/.firewalla/config/log_shipping.env
 ### 4. Bootstrap
 
 ```bash
-ssh pi@${FW_IP} 'curl -sSL https://raw.githubusercontent.com/PitziLabs/firewalla-axiom-pipeline/main/scripts/bootstrap.sh | bash'
+ssh pi@${FW_IP} 'curl -sSL https://raw.githubusercontent.com/lentago/firewalla-axiom-pipeline/main/scripts/bootstrap.sh | bash'
 ```
 
 `scripts/bootstrap.sh` clones this repo to `/home/pi/.firewalla/firewalla-axiom-pipeline/`, copies the config tree into `/home/pi/.firewalla/config/`, installs the crontab (which includes the 5-min GitOps poller), and starts the Fluent Bit container. One-time only — after this, the device self-syncs from `main`.
@@ -154,7 +154,7 @@ The shipped `fluent-bit.conf` has **two outputs** active:
 | `[OUTPUT] http` (line ~111) | Axiom HTTPS API | Long-retention search, dashboards, primary durable copy |
 | `[OUTPUT] loki` (line ~140) | Grafana Cloud Loki (direct push, TLS 443) | Live dashboards / alerting via Grafana Cloud; credentials from `GRAFANA_CLOUD_LOGS_*` env vars |
 
-The two outputs are independent — each retries on its own, and an outage on one side does not affect the other. `Retry_Limit False` on both means a peer outage self-heals without operator intervention once connectivity returns (the fix from [#43](https://github.com/PitziLabs/firewalla-axiom-pipeline/issues/43)).
+The two outputs are independent — each retries on its own, and an outage on one side does not affect the other. `Retry_Limit False` on both means a peer outage self-heals without operator intervention once connectivity returns (the fix from [#43](https://github.com/lentago/firewalla-axiom-pipeline/issues/43)).
 
 If you don't use Grafana Cloud Loki, either:
 - Replace the `GRAFANA_CLOUD_LOGS_*` values with your own Loki/Promtail/Vector endpoint credentials, or
@@ -162,7 +162,7 @@ If you don't use Grafana Cloud Loki, either:
 
 ### Loki output contract
 
-The `[OUTPUT] loki` block attaches a fixed set of stream labels to every log line. The [PitziLabs/homelab-observability](https://github.com/PitziLabs/homelab-observability) dashboards and alert rules query these labels by name — **changing any of them silently breaks the consumer** (mismatches produce empty panels, not errors).
+The `[OUTPUT] loki` block attaches a fixed set of stream labels to every log line. The [lentago/homelab-observability](https://github.com/lentago/homelab-observability) dashboards and alert rules query these labels by name — **changing any of them silently breaks the consumer** (mismatches produce empty panels, not errors).
 
 **Stream labels on every event:**
 
@@ -340,7 +340,7 @@ What it does, step by step:
 `deploy.sh` does **not** clone the repo or install the GitOps poller's target directory. If you used `deploy.sh` to bootstrap from scratch (no `bootstrap.sh`), follow up with:
 
 ```bash
-ssh pi@<fw-ip> 'git clone https://github.com/PitziLabs/firewalla-axiom-pipeline.git /home/pi/.firewalla/firewalla-axiom-pipeline'
+ssh pi@<fw-ip> 'git clone https://github.com/lentago/firewalla-axiom-pipeline.git /home/pi/.firewalla/firewalla-axiom-pipeline'
 ```
 
 After that, the cron poller (already in `user_crontab`) will start syncing every 5 min.
@@ -357,9 +357,9 @@ This was built for a specific home network setup (Firewalla Gold SE → Axiom). 
 
 ## Related
 
-- **[PitziLabs/homelab-observability](https://github.com/PitziLabs/homelab-observability)** — Grafana Cloud + Alloy observability stack for the Firewalla home network
-- **[PitziLabs/workstation-bootstrap](https://github.com/PitziLabs/workstation-bootstrap)** — Workstation bootstrap scripts for the same homelab environment
-- **[PitziLabs/foundry-platform-demo](https://github.com/PitziLabs/foundry-platform-demo)** — Terraform AWS lab — same infrastructure-as-portfolio philosophy
+- **[lentago/homelab-observability](https://github.com/lentago/homelab-observability)** — Grafana Cloud + Alloy observability stack for the Firewalla home network
+- **[lentago/workstation-bootstrap](https://github.com/lentago/workstation-bootstrap)** — Workstation bootstrap scripts for the same homelab environment
+- **[lentago/foundry-platform-demo](https://github.com/lentago/foundry-platform-demo)** — Terraform AWS lab — same infrastructure-as-portfolio philosophy
 
 ## License
 

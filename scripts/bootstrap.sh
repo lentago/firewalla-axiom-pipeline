@@ -14,7 +14,7 @@
 # =============================================================================
 set -euo pipefail
 
-readonly REPO_URL="https://github.com/PitziLabs/firewalla-axiom-pipeline.git"
+readonly REPO_URL="https://github.com/lentago/firewalla-axiom-pipeline.git"
 readonly CLONE_PATH="/home/pi/.firewalla/firewalla-axiom-pipeline"
 readonly LIVE_DIR="/home/pi/.firewalla/config"
 readonly ENV_FILE="${LIVE_DIR}/log_shipping.env"
