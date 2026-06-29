@@ -1,7 +1,7 @@
 # ============================================================================
 # ShellCheck — Static Analysis
 # ============================================================================
-# Thin wrapper around PitziLabs/shared-workflows/shellcheck.yml.
+# Thin wrapper around lentago/shared-workflows/shellcheck.yml.
 # Required status check for branch protection / auto-merge.
 # ============================================================================
 
@@ -13,7 +13,7 @@ on:
 
 jobs:
   shellcheck:
-    uses: PitziLabs/shared-workflows/.github/workflows/shellcheck.yml@main
+    uses: lentago/shared-workflows/.github/workflows/shellcheck.yml@main
     with:
       scripts: |
         deploy.sh
