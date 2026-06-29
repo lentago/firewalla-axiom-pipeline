@@ -1,7 +1,7 @@
 # ============================================================================
 # Claude Code — Interactive @claude Responder
 # ============================================================================
-# Thin wrapper around PitziLabs/shared-workflows/claude-responder.yml.
+# Thin wrapper around lentago/shared-workflows/claude-responder.yml.
 # The reusable workflow handles label-based model routing, the @claude
 # mention predicate, and action invocation. This file just declares
 # triggers and the repo-specific allowed-tools list.
@@ -29,7 +29,7 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: PitziLabs/shared-workflows/.github/workflows/claude-responder.yml@main
+    uses: lentago/shared-workflows/.github/workflows/claude-responder.yml@main
     secrets: inherit
     with:
       allowed_tools: '"Bash(git add:*)" "Bash(git commit:*)" "Bash(git checkout:*)" "Bash(git switch:*)" "Bash(git push:*)" "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git branch:*)" "Bash(gh pr create:*)" "Bash(gh pr merge:*)" "Bash(gh pr view:*)" "Bash(shellcheck:*)" "Read" "Edit" "Write"'
