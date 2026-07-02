@@ -10,7 +10,6 @@
 #   - DNS resolution failures wedging the connection pool
 #   - Axiom outage recovery (503s resolved but flushes stuck)
 #   - Stale connections after network changes
-#   - Container running but silently doing nothing
 #
 # Install location: /home/pi/.firewalla/config/fluent_bit_healthcheck.sh
 # =============================================================================
@@ -76,18 +75,10 @@ fi
 # --- Get recent logs ---------------------------------------------------------
 RECENT_LOGS=$(sudo docker logs --since "$CHECK_WINDOW" "$CONTAINER_NAME" 2>&1)
 
-# --- No output at all = suspicious -------------------------------------------
-# Fluent Bit should produce SOMETHING every flush interval (10s).
-# 5 minutes of silence means it's frozen or the container is wedged.
-if [ -z "$RECENT_LOGS" ]; then
-    log "WARNING: No output in last ${CHECK_WINDOW} — restarting"
-    emit_restart_metric "no output in last ${CHECK_WINDOW}"
-    sudo docker restart "$CONTAINER_NAME" >> "$LOGFILE" 2>&1
-    log "Container restarted (reason: no output)"
-    exit 0
-fi
-
 # --- Check for successful activity -------------------------------------------
+# Silence is healthy: Fluent Bit logs nothing when flushes succeed quietly.
+# No-data detection (extended gap with zero events reaching Axiom) is handled
+# by the external Axiom monitor, not this script.
 # Fluent Bit doesn't log successful flushes at "warn" level, but it DOES
 # stay quiet when things are working. Errors are loud. So the logic is:
 #   - If we see errors AND nothing else → stuck
