@@ -48,9 +48,11 @@ SWAP_USED=$(free -m 2>/dev/null | awk '/^Swap:/{print $3}')
 LOAD1=$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo "0")
 BSPOOL_PCT=$(df /bspool 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}' || echo "0")
 
-# Count worker processes (zeek -i <iface> implies a worker)
+# Count worker processes (zeek -i <iface> implies a worker).
+# grep -c prints "0" itself on no match (exiting 1) — `|| true` satisfies
+# pipefail without appending a second "0" line, which would corrupt the JSON.
 ZEEK_WORKER_COUNT=$(ps -eo args 2>/dev/null \
-    | grep -c '/usr/local/zeek/bin/[z]eek.*-i ' || echo "0")
+    | grep -c '/usr/local/zeek/bin/[z]eek.*-i ' || true)
 
 # ── Build JSON batch ──────────────────────────────────────────────────────────
 printf '[' > "$TMPFILE"
@@ -116,7 +118,7 @@ HTTP_BODY=$(echo "$HTTP_RESPONSE" | head -n -1)
 HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n 1)
 
 if [ "$HTTP_CODE" = "200" ]; then
-    ZEEK_PROC_COUNT=$(grep -c '"metric_scope":"zeek_process"' "$TMPFILE" || echo 0)
+    ZEEK_PROC_COUNT=$(grep -c '"metric_scope":"zeek_process"' "$TMPFILE" || true)
     echo "[system-metrics] Exported ${ZEEK_PROC_COUNT} Zeek process(es) + 1 host event to ${AXIOM_DATASET} (workers=${ZEEK_WORKER_COUNT})"
 else
     echo "[system-metrics] ERROR: HTTP ${HTTP_CODE}"
