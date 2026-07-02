@@ -444,7 +444,8 @@ Surfaces misconfigured or misbehaving devices generating failed requests.
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name
+    | summarize arg_max(_time, name) by mac
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | extend device = coalesce(name, source_mac)
 | summarize errors = count() by device, host, status_code
@@ -465,7 +466,8 @@ Unexpected user-agents on known devices can indicate compromised software or rog
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name
+    | summarize arg_max(_time, name) by mac
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | extend device = coalesce(name, source_mac)
 | summarize request_count = count() by device, user_agent
@@ -486,7 +488,8 @@ Unexpected user-agents on known devices can indicate compromised software or rog
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name
+    | summarize arg_max(_time, name) by mac
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | extend device    = coalesce(name, source_mac)
 | extend size_mb   = round(response_body_len / 1048576.0, 2)
@@ -579,7 +582,8 @@ High-risk downloads worth reviewing regardless of the source.
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name
+    | summarize arg_max(_time, name) by mac
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | extend device = coalesce(name, source_mac)
 | project _time, device, note, msg, src, dst
@@ -630,7 +634,8 @@ A device suddenly generating many weirdness entries is worth investigating.
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name
+    | summarize arg_max(_time, name) by mac
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | extend device = coalesce(name, source_mac)
 | summarize anomalies = count() by device, name
@@ -649,7 +654,8 @@ A spike in weird entries from a device can indicate active malware or scanning a
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name
+    | summarize arg_max(_time, name) by mac
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | extend device = coalesce(name, source_mac)
 | summarize anomalies = count() by device, bin_auto(_time)
