@@ -7,6 +7,36 @@ Replace dataset names with your own (e.g., `cjp-firewalla` → `firewalla`).
 joined to `mac` in the devices dataset). This resolves both IPv4 and IPv6 traffic
 to the correct device — the original IP-based join missed all IPv6 queries.
 
+## Canonical device-lookup subquery (latest record per MAC)
+
+The `firewalla-devices` dataset is append-only: `device_lookup_export.sh` writes a
+fresh row per device every hour, so a single MAC accumulates many historical rows
+(old device names, old groups, and — before the lowercase-MAC fix — old uppercase
+MAC keys). Selecting the dataset with a plain `distinct mac, name` returns **all**
+of those rows, producing duplicate join matches and stale names.
+
+**Do not** time-scope the device dataset with `| where _time > ago(24h)` to work
+around this. That filter is fragile: if the hourly `device_lookup_export.sh` cron
+fails for more than 24h, every join silently returns nothing.
+
+Instead, collapse the dataset to the **freshest row per MAC** with
+[`arg_max`](https://axiom.co/docs/apl/aggregation-function/arg-max), which returns
+the other fields from the row holding the maximum `_time`:
+
+```kusto
+['firewalla-devices']
+| where record_type == "device_lookup"
+| summarize arg_max(_time, name, group) by mac
+| project mac, name, group
+```
+
+This always resolves each device to its most recent name/group regardless of export
+recency, and emits exactly one row per MAC — no duplicates, no `_time` window to
+maintain. Use this subquery (projecting whichever of `name`/`group` a given panel
+needs) as the right-hand side of every device join below. When a query filters by
+group, apply the `| where group == ...` **after** the `arg_max` so devices that
+changed groups are matched on their current group, not a stale one.
+
 ## Ad-hoc queries (Query tab)
 
 ### Top 20 most-queried domains
@@ -33,7 +63,8 @@ to the correct device — the original IP-based join missed all IPv6 queries.
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name
+    | summarize arg_max(_time, name) by mac
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | extend device = coalesce(name, source_mac)
 | summarize unique_domains = dcount(domain), total_queries = count() by device
@@ -105,7 +136,7 @@ Create a new dashboard → Add element → **Filter Bar**
 ```kusto
 ['firewalla-devices']
 | where record_type == "device_lookup"
-| distinct name, mac
+| summarize arg_max(_time, name) by mac
 | project key=name, value=mac
 | sort by key asc
 ```
@@ -192,7 +223,8 @@ Shows which device groups generate the most DNS traffic.
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, group
+    | summarize arg_max(_time, group) by mac
+    | project mac, group
 ) on $left.source_mac == $right.mac
 | extend device_group = coalesce(group, "Unknown")
 | summarize query_count = count() by device_group
@@ -212,7 +244,8 @@ ramps up evenings, IoT is constant.
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, group
+    | summarize arg_max(_time, group) by mac
+    | project mac, group
 ) on $left.source_mac == $right.mac
 | extend device_group = coalesce(group, "Unknown")
 | summarize queries = count() by bin_auto(_time), device_group
@@ -229,6 +262,7 @@ Add a **Filter Bar** with a group selector:
 ```kusto
 ['firewalla-devices']
 | where record_type == "device_lookup"
+| summarize arg_max(_time, group) by mac
 | distinct group
 | project key=group, value=group
 | sort by key asc
@@ -246,8 +280,9 @@ declare query_parameters(_group:string = "");
 | join kind=inner (
     ['firewalla-devices']
     | where record_type == "device_lookup"
+    | summarize arg_max(_time, name, group) by mac
     | where group == _group
-    | distinct mac, name
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | summarize query_count = count() by name, domain
 | order by query_count desc
@@ -266,8 +301,9 @@ Shows exactly what your smart home devices are phoning home to.
 | join kind=inner (
     ['firewalla-devices']
     | where record_type == "device_lookup"
+    | summarize arg_max(_time, name, group) by mac
     | where group == "IoT" or group == "Smart Home"
-    | distinct mac, name
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | summarize query_count = count() by name, domain
 | order by query_count desc
@@ -300,7 +336,8 @@ today_domains
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name, group
+    | summarize arg_max(_time, name, group) by mac
+    | project mac, name, group
 ) on $left.source_mac == $right.mac
 | summarize new_domains = dcount(domain), domains = make_set(domain) by name, group
 | order by new_domains desc
@@ -320,8 +357,9 @@ declare query_parameters(_group:string = "Kids");
 | join kind=inner (
     ['firewalla-devices']
     | where record_type == "device_lookup"
+    | summarize arg_max(_time, name, group) by mac
     | where group == _group or group == "Kids-TVs"
-    | distinct mac, name
+    | project mac, name
 ) on $left.source_mac == $right.mac
 | summarize query_count = count() by name, domain
 | order by query_count desc
@@ -341,7 +379,8 @@ IoT phoning home at 2am or kids sneaking screen time.
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name, group
+    | summarize arg_max(_time, name, group) by mac
+    | project mac, name, group
 ) on $left.source_mac == $right.mac
 | extend device = coalesce(name, source_mac)
 | summarize queries = count() by device, hour
@@ -363,7 +402,8 @@ Top destinations by estimated bytes transferred. Requires conn.log data.
 | join kind=leftouter (
     ['firewalla-devices']
     | where record_type == "device_lookup"
-    | distinct mac, name, group
+    | summarize arg_max(_time, name, group) by mac
+    | project mac, name, group
 ) on $left.source_mac == $right.mac
 | extend device = coalesce(name, source_mac)
 | summarize total_traffic = sum(total_bytes) by device, group
