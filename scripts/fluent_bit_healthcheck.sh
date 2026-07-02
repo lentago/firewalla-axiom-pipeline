@@ -66,7 +66,7 @@ emit_restart_metric() {
 }
 
 # --- Is the container even running? ------------------------------------------
-if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+if ! sudo docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     log "Container not running — starting via post_main.d script"
     emit_restart_metric "container_not_running"
     sudo /home/pi/.firewalla/config/post_main.d/start_log_shipping.sh 2>&1 | tee -a "$LOGFILE" >/dev/null
@@ -74,7 +74,7 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
 fi
 
 # --- Get recent logs ---------------------------------------------------------
-RECENT_LOGS=$(docker logs --since "$CHECK_WINDOW" "$CONTAINER_NAME" 2>&1)
+RECENT_LOGS=$(sudo docker logs --since "$CHECK_WINDOW" "$CONTAINER_NAME" 2>&1)
 
 # --- No output at all = suspicious -------------------------------------------
 # Fluent Bit should produce SOMETHING every flush interval (10s).
@@ -82,7 +82,7 @@ RECENT_LOGS=$(docker logs --since "$CHECK_WINDOW" "$CONTAINER_NAME" 2>&1)
 if [ -z "$RECENT_LOGS" ]; then
     log "WARNING: No output in last ${CHECK_WINDOW} — restarting"
     emit_restart_metric "no output in last ${CHECK_WINDOW}"
-    docker restart "$CONTAINER_NAME" >> "$LOGFILE" 2>&1
+    sudo docker restart "$CONTAINER_NAME" >> "$LOGFILE" 2>&1
     log "Container restarted (reason: no output)"
     exit 0
 fi
@@ -124,7 +124,7 @@ if [ "$TOTAL_LINES" -gt 0 ]; then
         log "WARNING: ${ERROR_RATIO}% error rate (${ERROR_LINES}/${TOTAL_LINES} lines) — restarting"
         log "Last errors: $(echo "$RECENT_LOGS" | grep '\[error\]' | tail -3)"
         emit_restart_metric "high error rate: ${ERROR_RATIO}% (${ERROR_LINES}/${TOTAL_LINES} lines)"
-        docker restart "$CONTAINER_NAME" >> "$LOGFILE" 2>&1
+        sudo docker restart "$CONTAINER_NAME" >> "$LOGFILE" 2>&1
         log "Container restarted (reason: high error rate)"
         exit 0
     fi
