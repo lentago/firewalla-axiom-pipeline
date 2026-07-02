@@ -370,3 +370,248 @@ Top destinations by estimated bytes transferred. Requires conn.log data.
 | extend traffic_mb = round(total_traffic / 1048576.0, 2)
 | order by total_traffic desc
 ```
+
+---
+
+## HTTP log queries (zeek_http)
+
+### Top HTTP hosts by request count
+
+```kusto
+['firewalla']
+| where log_source == "zeek_http"
+| extend parsed = parse_json(log)
+| extend host = tostring(parsed["host"])
+| where isnotempty(host)
+| summarize requests = count() by host
+| order by requests desc
+| take 25
+```
+
+### HTTP 4xx/5xx errors by device
+
+Surfaces misconfigured or misbehaving devices generating failed requests.
+
+```kusto
+['firewalla']
+| where log_source == "zeek_http"
+| extend parsed      = parse_json(log)
+| extend source_mac  = tostring(parsed["orig_l2_addr"])
+| extend host        = tostring(parsed["host"])
+| extend uri         = tostring(parsed["uri"])
+| extend status_code = toint(parsed["status_code"])
+| where status_code >= 400
+| join kind=leftouter (
+    ['firewalla-devices']
+    | where record_type == "device_lookup"
+    | distinct mac, name
+) on $left.source_mac == $right.mac
+| extend device = coalesce(name, source_mac)
+| summarize errors = count() by device, host, status_code
+| order by errors desc
+```
+
+### User-agent fingerprinting — unique clients
+
+Unexpected user-agents on known devices can indicate compromised software or rogue processes.
+
+```kusto
+['firewalla']
+| where log_source == "zeek_http"
+| extend parsed     = parse_json(log)
+| extend source_mac = tostring(parsed["orig_l2_addr"])
+| extend user_agent = tostring(parsed["user_agent"])
+| where isnotempty(user_agent)
+| join kind=leftouter (
+    ['firewalla-devices']
+    | where record_type == "device_lookup"
+    | distinct mac, name
+) on $left.source_mac == $right.mac
+| extend device = coalesce(name, source_mac)
+| summarize request_count = count() by device, user_agent
+| order by request_count desc
+```
+
+### Large HTTP downloads (response body > 1 MB)
+
+```kusto
+['firewalla']
+| where log_source == "zeek_http"
+| extend parsed            = parse_json(log)
+| extend source_mac        = tostring(parsed["orig_l2_addr"])
+| extend host              = tostring(parsed["host"])
+| extend uri               = tostring(parsed["uri"])
+| extend response_body_len = tolong(parsed["response_body_len"])
+| where response_body_len > 1048576
+| join kind=leftouter (
+    ['firewalla-devices']
+    | where record_type == "device_lookup"
+    | distinct mac, name
+) on $left.source_mac == $right.mac
+| extend device    = coalesce(name, source_mac)
+| extend size_mb   = round(response_body_len / 1048576.0, 2)
+| project _time, device, host, uri, size_mb
+| order by size_mb desc
+```
+
+---
+
+## Files log queries (zeek_files)
+
+### MIME-type breakdown — what types of content are being transferred
+
+```kusto
+['firewalla']
+| where log_source == "zeek_files"
+| extend parsed    = parse_json(log)
+| extend mime_type = tostring(parsed["mime_type"])
+| extend source    = tostring(parsed["source"])
+| where isnotempty(mime_type)
+| summarize transfers = count(), total_bytes = sum(tolong(parsed["seen_bytes"])) by mime_type, source
+| extend total_mb = round(total_bytes / 1048576.0, 2)
+| order by transfers desc
+```
+
+### Executable files downloaded (PE/ELF binaries)
+
+High-risk downloads worth reviewing regardless of the source.
+
+```kusto
+['firewalla']
+| where log_source == "zeek_files"
+| extend parsed    = parse_json(log)
+| extend mime_type = tostring(parsed["mime_type"])
+| extend rx_hosts  = tostring(parsed["rx_hosts"])
+| extend tx_hosts  = tostring(parsed["tx_hosts"])
+| extend filename  = tostring(parsed["filename"])
+| extend seen_bytes = tolong(parsed["seen_bytes"])
+| where mime_type in ("application/x-dosexec", "application/x-elf",
+                      "application/x-executable", "application/x-msdownload",
+                      "application/vnd.microsoft.portable-executable")
+| project _time, rx_hosts, tx_hosts, filename, mime_type, seen_bytes
+| order by _time desc
+```
+
+### Large file transfers by receiving device
+
+```kusto
+['firewalla']
+| where log_source == "zeek_files"
+| extend parsed     = parse_json(log)
+| extend rx_hosts   = tostring(parsed["rx_hosts"])
+| extend mime_type  = tostring(parsed["mime_type"])
+| extend seen_bytes = tolong(parsed["seen_bytes"])
+| where seen_bytes > 1048576
+| summarize transfers = count(), total_bytes = sum(seen_bytes) by rx_hosts, mime_type
+| extend total_mb = round(total_bytes / 1048576.0, 2)
+| order by total_bytes desc
+```
+
+---
+
+## Notice log queries (zeek_notice)
+
+### Notice alerts overview — all notice types in window
+
+```kusto
+['firewalla']
+| where log_source == "zeek_notice"
+| extend parsed = parse_json(log)
+| extend note   = tostring(parsed["note"])
+| extend msg    = tostring(parsed["msg"])
+| extend src    = tostring(parsed["src"])
+| extend dst    = tostring(parsed["dst"])
+| summarize count = count() by note
+| order by count desc
+```
+
+### Notice alert stream with device names
+
+```kusto
+['firewalla']
+| where log_source == "zeek_notice"
+| extend parsed     = parse_json(log)
+| extend note       = tostring(parsed["note"])
+| extend msg        = tostring(parsed["msg"])
+| extend src        = tostring(parsed["src"])
+| extend dst        = tostring(parsed["dst"])
+| extend source_mac = tostring(parsed["orig_l2_addr"])
+| join kind=leftouter (
+    ['firewalla-devices']
+    | where record_type == "device_lookup"
+    | distinct mac, name
+) on $left.source_mac == $right.mac
+| extend device = coalesce(name, source_mac)
+| project _time, device, note, msg, src, dst
+| order by _time desc
+```
+
+### Port scan detections over time
+
+```kusto
+['firewalla']
+| where log_source == "zeek_notice"
+| extend parsed = parse_json(log)
+| extend note   = tostring(parsed["note"])
+| extend src    = tostring(parsed["src"])
+| where note startswith "Scan::"
+| summarize scans = count() by src, note, bin_auto(_time)
+| order by _time desc
+```
+
+---
+
+## Weird log queries (zeek_weird)
+
+### Protocol anomalies by type — top weird names
+
+```kusto
+['firewalla']
+| where log_source == "zeek_weird"
+| extend parsed = parse_json(log)
+| extend name   = tostring(parsed["name"])
+| where isnotempty(name)
+| summarize count = count() by name
+| order by count desc
+| take 20
+```
+
+### Anomalies by device — which hosts are generating weirdness
+
+A device suddenly generating many weirdness entries is worth investigating.
+
+```kusto
+['firewalla']
+| where log_source == "zeek_weird"
+| extend parsed     = parse_json(log)
+| extend source_mac = tostring(parsed["orig_l2_addr"])
+| extend name       = tostring(parsed["name"])
+| where isnotempty(source_mac)
+| join kind=leftouter (
+    ['firewalla-devices']
+    | where record_type == "device_lookup"
+    | distinct mac, name
+) on $left.source_mac == $right.mac
+| extend device = coalesce(name, source_mac)
+| summarize anomalies = count() by device, name
+| order by anomalies desc
+```
+
+### Weird anomaly rate over time (spike detection)
+
+A spike in weird entries from a device can indicate active malware or scanning activity.
+
+```kusto
+['firewalla']
+| where log_source == "zeek_weird"
+| extend parsed     = parse_json(log)
+| extend source_mac = tostring(parsed["orig_l2_addr"])
+| join kind=leftouter (
+    ['firewalla-devices']
+    | where record_type == "device_lookup"
+    | distinct mac, name
+) on $left.source_mac == $right.mac
+| extend device = coalesce(name, source_mac)
+| summarize anomalies = count() by device, bin_auto(_time)
+| order by _time desc
+```

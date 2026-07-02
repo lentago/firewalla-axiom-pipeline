@@ -342,6 +342,224 @@ identifying handshake metadata that lets you fingerprint clients and services.
 
 ---
 
+## http.log fields
+
+Each row in `http.log` represents a single HTTP request/response pair. Most
+modern traffic is HTTPS and won't appear here — `ssl.log` covers those
+connections via SNI. This log captures unencrypted HTTP (port 80 and custom
+ports), HTTP CONNECT tunnels, and any HTTP inside the network before a TLS
+session begins.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ts` | float | Timestamp of the request. |
+| `uid` | string | Unique connection identifier. Joins to `conn.log` and `files.log` on the same `uid`. |
+| `id.orig_h` / `id.orig_p` | string / int | Source IP/port of the HTTP client. |
+| `id.resp_h` / `id.resp_p` | string / int | Destination IP/port of the HTTP server. |
+| `trans_depth` | int | Request-reply depth within a persistent connection. `1` = first request. |
+| `method` | string | HTTP request method: `GET`, `POST`, `PUT`, `DELETE`, `HEAD`, etc. |
+| `host` | string | Value of the HTTP `Host:` header — the requested hostname. Primary field for identifying the server on port 80. |
+| `uri` | string | Request URI path and query string (e.g., `/api/v2/data?limit=50`). May be very long. |
+| `referrer` | string | Value of the `Referer:` header. Empty for direct requests. |
+| `version` | string | HTTP version negotiated: `1.0`, `1.1`, or `2`. |
+| `user_agent` | string | Value of the `User-Agent:` header. Useful for identifying device types and application software. |
+| `request_body_len` | int | Bytes in the request body (e.g., POST payload). `0` for GET requests. |
+| `response_body_len` | int | Bytes in the response body. Use this to spot large downloads. |
+| `status_code` | int | HTTP response status code (e.g., `200`, `301`, `404`, `500`). |
+| `status_msg` | string | Human-readable response status (e.g., `OK`, `Not Found`, `Moved Permanently`). |
+| `tags` | array | Tags assigned by Zeek's HTTP analyzer (e.g., `PROXIMITY_BYTES`). Usually empty. |
+| `resp_fuids` | array | File unique IDs (from `files.log`) for content transferred in the response. Join to `files.log` on `fuid`. |
+| `resp_filenames` | array | Filenames extracted from `Content-Disposition` or similar headers. |
+| `resp_mime_types` | array | MIME types of response bodies (e.g., `text/html`, `application/json`, `image/jpeg`). |
+| `orig_fuids` | array | File unique IDs for content sent in the request body (e.g., file uploads). |
+| `orig_filenames` | array | Filenames in the request (e.g., multipart uploads). |
+| `orig_mime_types` | array | MIME types of uploaded content. |
+| `orig_l2_addr` | string | Source MAC — use for device joins. |
+| `resp_l2_addr` | string | Destination MAC. |
+
+### Example http.log event (raw JSON)
+
+```json
+{
+  "ts": 1741737700.123,
+  "uid": "CabcXY1234",
+  "id.orig_h": "192.168.1.55",
+  "id.orig_p": 49201,
+  "id.resp_h": "93.184.216.34",
+  "id.resp_p": 80,
+  "trans_depth": 1,
+  "method": "GET",
+  "host": "example.com",
+  "uri": "/index.html",
+  "referrer": "",
+  "version": "1.1",
+  "user_agent": "Mozilla/5.0 (Linux; Android 13) ...",
+  "request_body_len": 0,
+  "response_body_len": 1256,
+  "status_code": 200,
+  "status_msg": "OK",
+  "tags": [],
+  "resp_fuids": ["FaBcD1e2f3"],
+  "resp_filenames": [],
+  "resp_mime_types": ["text/html"],
+  "orig_fuids": [],
+  "orig_filenames": [],
+  "orig_mime_types": [],
+  "orig_l2_addr": "e8:4c:4a:db:9c:e8",
+  "resp_l2_addr": "dc:a6:32:01:23:45"
+}
+```
+
+---
+
+## files.log fields
+
+Each row in `files.log` represents a file observed in transit across any
+protocol that Zeek's file analysis framework supports (HTTP, SMTP, FTP, SSL
+certificate DER data, etc.). Rows are keyed by `fuid` (file unique ID) rather
+than a connection `uid` — a single connection may produce multiple file rows
+if multiple transfers occur.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ts` | float | Timestamp when Zeek began observing this file. |
+| `fuid` | string | File unique ID. Matches `resp_fuids` / `orig_fuids` in `http.log`. |
+| `tx_hosts` | array | IP(s) that transmitted the file. |
+| `rx_hosts` | array | IP(s) that received the file. |
+| `conn_uids` | array | Connection UIDs associated with this file transfer. Joins to `conn.log` and `http.log`. |
+| `source` | string | Protocol that produced the file: `HTTP`, `SMTP`, `FTP`, `SSL` (for cert chains), etc. |
+| `depth` | int | HTTP transaction depth within the connection (matches `http.log` `trans_depth`). |
+| `analyzers` | array | File analyzers that processed this file (e.g., `MD5`, `SHA1`, `SHA256`, `PE`, `Unified2`). |
+| `mime_type` | string | Detected MIME type of the file (e.g., `application/pdf`, `image/png`, `application/x-dosexec`). |
+| `filename` | string | Filename if extractable from the protocol (e.g., from `Content-Disposition`). Absent if unknown. |
+| `duration` | float | How long the transfer took in seconds. |
+| `is_orig` | bool | `true` if the file was sent by the connection originator (upload), `false` for download. |
+| `seen_bytes` | int | Bytes of file content actually observed by Zeek. |
+| `total_bytes` | int | Expected total file size (from `Content-Length` or equivalent). Absent if unknown. |
+| `missing_bytes` | int | Bytes Zeek could not observe due to packet loss. |
+| `overflow_bytes` | int | Bytes not passed to analyzers because the file exceeded Zeek's analysis size limit. |
+| `timedout` | bool | `true` if the file transfer was still in progress when Zeek's timer expired. |
+| `md5` | string | MD5 hash of the file content. Only present if the MD5 analyzer ran (not always enabled). |
+| `sha1` | string | SHA-1 hash. Present if SHA1 analyzer ran. |
+| `sha256` | string | SHA-256 hash. Present if SHA256 analyzer ran. |
+
+### Example files.log event (raw JSON)
+
+```json
+{
+  "ts": 1741737705.456,
+  "fuid": "FaBcD1e2f3",
+  "tx_hosts": ["93.184.216.34"],
+  "rx_hosts": ["192.168.1.55"],
+  "conn_uids": ["CabcXY1234"],
+  "source": "HTTP",
+  "depth": 1,
+  "analyzers": ["MD5", "SHA1"],
+  "mime_type": "application/pdf",
+  "filename": "document.pdf",
+  "duration": 0.312,
+  "is_orig": false,
+  "seen_bytes": 45312,
+  "total_bytes": 45312,
+  "missing_bytes": 0,
+  "overflow_bytes": 0,
+  "timedout": false,
+  "md5": "d8e8fca2dc0f896fd7cb4cb0031ba249",
+  "sha1": "4e1243bd22c66e76c2ba9eddc1f91394e57f9f83"
+}
+```
+
+---
+
+## notice.log fields
+
+Each row in `notice.log` is a security notice generated by Zeek's detection
+scripts. These are high-signal, low-volume events — Zeek only writes here when
+something is genuinely notable. Common notice types include port scans, SSH
+brute-force, and protocol policy violations. On a home network you may see
+very few of these or none at all.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ts` | float | Timestamp of the notice. |
+| `uid` | string | Connection UID if the notice is tied to a specific connection. Absent for scan-level notices. |
+| `id.orig_h` / `id.orig_p` | string / int | Source IP/port of the connection that triggered the notice (if applicable). |
+| `id.resp_h` / `id.resp_p` | string / int | Destination IP/port. |
+| `proto` | string | Transport protocol (`tcp`, `udp`, `icmp`). |
+| `note` | string | **The notice type identifier** — a namespaced string like `Scan::Port_Scan`, `SSH::Password_Guessing`, `SSL::Invalid_Server_Cert`. This is the primary field for filtering and categorising alerts. |
+| `msg` | string | Human-readable description of the notice. |
+| `sub` | string | Sub-message with additional context or evidence (e.g., list of scanned ports). |
+| `src` | string | Source address associated with the notice. May differ from `id.orig_h` for scan-type notices that aggregate connections. |
+| `dst` | string | Destination address associated with the notice. |
+| `p` | int | Associated port number (if relevant to the notice type). |
+| `n` | int | A count relevant to the notice (e.g., number of failed SSH attempts). |
+| `actions` | array | Actions Zeek applied: `Notice::ACTION_LOG` (always), optionally `Notice::ACTION_EMAIL` or `Notice::ACTION_ALARM`. |
+| `suppress_for` | float | Seconds before Zeek will re-emit this notice for the same source/dest pair. Suppressed repeats are not logged. |
+
+### Example notice.log event (raw JSON)
+
+```json
+{
+  "ts": 1741737800.000,
+  "uid": "",
+  "id.orig_h": "192.168.1.99",
+  "id.orig_p": 0,
+  "id.resp_h": "192.168.1.1",
+  "id.resp_p": 0,
+  "proto": "tcp",
+  "note": "Scan::Port_Scan",
+  "msg": "192.168.1.99 scanned at least 15 unique ports of host 192.168.1.1 in 0m1s",
+  "sub": "Scanned ports: 22, 23, 80, 443, ...",
+  "src": "192.168.1.99",
+  "dst": "192.168.1.1",
+  "p": 0,
+  "n": 15,
+  "actions": ["Notice::ACTION_LOG"],
+  "suppress_for": 3600.0
+}
+```
+
+---
+
+## weird.log fields
+
+Each row in `weird.log` records a protocol anomaly or unexpected packet
+pattern that Zeek's state machine could not classify normally. These are
+distinct from notices — Zeek generates a weird entry automatically whenever
+the observed traffic violates protocol expectations, without requiring a
+detection script. High weird rates from a specific device often indicate
+malware C2 traffic, misconfigured applications, or active network scanning.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ts` | float | Timestamp of the anomaly. |
+| `uid` | string | Connection UID if the weird is tied to a specific connection. |
+| `id.orig_h` / `id.orig_p` | string / int | Source IP/port. |
+| `id.resp_h` / `id.resp_p` | string / int | Destination IP/port. |
+| `name` | string | **The weird type** — a string identifying the specific anomaly (e.g., `bad_checksum`, `illegal_protocol_state`, `TCP_Christmas_tree_scan`, `above_hole_data_without_any_acks`). This is the primary grouping field. |
+| `addl` | string | Additional context about the anomaly (e.g., the unexpected value that triggered it). Absent if no extra context. |
+| `notice` | bool | `true` if this weird was also promoted to a `notice.log` entry. |
+| `peer` | string | Cluster node that generated this record (relevant in multi-node Zeek clusters; typically a single value on a standalone device). |
+
+### Example weird.log event (raw JSON)
+
+```json
+{
+  "ts": 1741737900.789,
+  "uid": "Cwx1234YYY",
+  "id.orig_h": "192.168.1.77",
+  "id.orig_p": 54321,
+  "id.resp_h": "203.0.113.5",
+  "id.resp_p": 443,
+  "name": "above_hole_data_without_any_acks",
+  "addl": "",
+  "notice": false,
+  "peer": "zeek"
+}
+```
+
+---
+
 ## acl-audit.log format (different from Zeek logs)
 
 `/alog/acl-audit.log` is **not** Zeek JSON — it's the Firewalla kernel's
@@ -379,3 +597,7 @@ See [dashboards/axiom-queries.md](../dashboards/axiom-queries.md#blocked-connect
 - [Zeek DNS log documentation](https://docs.zeek.org/en/master/scripts/base/protocols/dns/main.zeek.html)
 - [Zeek conn log documentation](https://docs.zeek.org/en/master/scripts/base/protocols/conn/main.zeek.html)
 - [Zeek SSL log documentation](https://docs.zeek.org/en/master/scripts/base/protocols/ssl/main.zeek.html)
+- [Zeek HTTP log documentation](https://docs.zeek.org/en/master/scripts/base/protocols/http/main.zeek.html)
+- [Zeek files log documentation](https://docs.zeek.org/en/master/scripts/base/frameworks/files/main.zeek.html)
+- [Zeek notice log documentation](https://docs.zeek.org/en/master/scripts/base/frameworks/notice/main.zeek.html)
+- [Zeek weird log documentation](https://docs.zeek.org/en/master/scripts/base/frameworks/notice/weird.zeek.html)
